@@ -11,6 +11,8 @@ import (
 	"strings"
 )
 
+const credentialsFileName = "credentials"
+
 // Config enthält alle Konfigurationsparameter für den File-Watcher.
 type Config struct {
 	Roots          []string `yaml:"roots"`           // Wurzelverzeichnisse zum Überwachen
@@ -53,6 +55,7 @@ type Config struct {
 // Default erstellt eine Konfiguration mit sensiblen Standardwerten.
 // Enthält gängige Dateierweiterungen und Ignore-Muster.
 func Default() Config {
+	dataDir := filepath.Join(".pg", "data")
 	return Config{
 		Roots:          []string{"."},
 		Ignore:         []string{".git/", "node_modules/", "dist/", "build/", "tmp/", "*.log"},
@@ -61,10 +64,10 @@ func Default() Config {
 		FollowNewDirs:  true,
 		DBEnable:       true,
 		DBPort:         54329,
-		DBDataDir:      filepath.Join(".pg", "data"),
+		DBDataDir:      dataDir,
 		DBRuntimeDir:   filepath.Join(".pg", "runtime"),
 		DBUser:         "watcher_pro",
-		DBPass:         mustRandomPassword(),
+		DBPass:         defaultDBPassword(dataDir),
 		DBName:         "postgres",
 		DBExpose:       false,
 		DBListen:       "127.0.0.1",
@@ -82,6 +85,48 @@ func Default() Config {
 		DBMaxWalSize:         "2GB",
 		DBEffectiveCacheSize: "1GB",
 	}
+}
+
+func defaultDBPassword(dataDir string) string {
+	pw, err := loadPersistedPassword(dataDir)
+	if err == nil && pw != "" {
+		return pw
+	}
+
+	pw = mustRandomPassword()
+	persistPassword(dataDir, pw)
+	return pw
+}
+
+func loadPersistedPassword(dataDir string) (string, error) {
+	credDir := filepath.Dir(dataDir)
+	credPath := filepath.Join(credDir, credentialsFileName)
+
+	if _, err := os.Stat(filepath.Clean(dataDir)); err != nil {
+		// Data directory missing, but credentials might still exist
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+	}
+
+	data, err := os.ReadFile(credPath)
+	if err != nil {
+		return "", err
+	}
+	pw := strings.TrimSpace(string(data))
+	if err := validatePassword(pw); err != nil {
+		return "", err
+	}
+	return pw, nil
+}
+
+func persistPassword(dataDir, password string) {
+	credDir := filepath.Dir(dataDir)
+	credPath := filepath.Join(credDir, credentialsFileName)
+	if err := os.MkdirAll(credDir, 0o700); err != nil {
+		return
+	}
+	_ = os.WriteFile(credPath, []byte(password+"\n"), 0o600)
 }
 
 // Normalize bereinigt und normalisiert die Konfigurationswerte.

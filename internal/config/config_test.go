@@ -2,11 +2,30 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
+func chdirTemp(t *testing.T) {
+	t.Helper()
+	tmp := t.TempDir()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get working dir: %v", err)
+	}
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("failed to chdir: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(wd); err != nil {
+			t.Errorf("failed to restore working dir: %v", err)
+		}
+	})
+}
+
 func TestDefaultGeneratesSecureCredentials(t *testing.T) {
+	chdirTemp(t)
 	cfg := Default()
 	if cfg.DBUser == "postgres" {
 		t.Fatalf("expected default db user to change from postgres")
@@ -26,6 +45,7 @@ func TestNormalizeRespectsEnvOverrides(t *testing.T) {
 	t.Setenv("WATCHER_DB_LISTEN", "0.0.0.0")
 	t.Setenv("WATCHER_DB_USER", "tester")
 	t.Setenv("WATCHER_DB_PASS", "Supersicher123")
+	chdirTemp(t)
 	cfg := Default()
 	cfg.Normalize()
 	if cfg.DBEnable {
@@ -49,6 +69,7 @@ func TestNormalizeRespectsEnvOverrides(t *testing.T) {
 }
 
 func TestValidateEnforcesPasswordRules(t *testing.T) {
+	chdirTemp(t)
 	cfg := Default()
 	cfg.DBPass = "weak"
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "db_pass") {
@@ -62,6 +83,7 @@ func TestValidateEnforcesPasswordRules(t *testing.T) {
 }
 
 func TestValidateRequiresListenForExpose(t *testing.T) {
+	chdirTemp(t)
 	cfg := Default()
 	cfg.DBExpose = true
 	cfg.DBListen = ""
@@ -98,5 +120,20 @@ func TestParseBoolEnv(t *testing.T) {
 		if actual != expect {
 			t.Fatalf("unexpected bool parse: %s -> %v", val, actual)
 		}
+	}
+}
+
+func TestDefaultReusesPersistedPassword(t *testing.T) {
+	chdirTemp(t)
+	if err := os.MkdirAll(filepath.Join(".pg", "data"), 0o700); err != nil {
+		t.Fatalf("failed to create data dir: %v", err)
+	}
+	first := Default()
+	if first.DBPass == "" {
+		t.Fatalf("expected password to be generated")
+	}
+	second := Default()
+	if first.DBPass != second.DBPass {
+		t.Fatalf("expected password to remain stable across restarts")
 	}
 }
